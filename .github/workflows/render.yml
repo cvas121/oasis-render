@@ -1,0 +1,24 @@
+name: Oasis Render
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/10 * * * *'
+concurrency: oasis-render
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]   # GH-20-1108: 20 maquinas a la vez (tope gratis de GitHub)
+    steps:
+      - name: Instalar ffmpeg
+        run: which ffmpeg >/dev/null 2>&1 || (sudo apt-get -qq update && sudo apt-get -qq install -y ffmpeg >/dev/null)
+      - name: Renderizar recortes pendientes
+        env:
+          OASIS_PULL: ${{ secrets.OASIS_PULL }}
+        run: |
+          sleep $(( (${{ matrix.shard }} - 1) * 4 ))
+          curl -fsS --retry 6 --retry-delay 10 --retry-all-errors --connect-timeout 20 -H "X-OASIS-PULL: $OASIS_PULL" "https://sanate.store/gh-render.php?a=driver" -o driver.py || { echo "Hostinger no respondio a este shard; lo toma la siguiente vuelta"; exit 0; }
+          python3 driver.py
