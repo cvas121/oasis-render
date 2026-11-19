@@ -1,0 +1,66 @@
+name: frames
+# HD-GITHUB-1012: saca los cuadros HD de las recetas de plantillas (oasis33.co/capone/api/recetas.php) con ffmpeg
+on:
+  schedule:
+    - cron: '17,47 * * * *'
+  workflow_dispatch: {}
+concurrency: oasis-frames
+jobs:
+  frames:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null
+      - name: cuadros
+        env:
+          RC: ${{ secrets.RC_CLAVE }}
+        run: |
+          python3 - <<'PY'
+          import json, os, base64, subprocess, time, urllib.request, urllib.parse
+          B = 'https://oasis33.co/capone/api/recetas.php'
+          K = os.environ['RC']
+          H = {'User-Agent': 'oasis-frames/1.0'}
+          def get(u, t=60):
+              for i in range(5):
+                  try:
+                      return urllib.request.urlopen(urllib.request.Request(u, headers=H), timeout=t).read()
+                  except Exception as e:
+                      print('reintento', i, str(e)[:80]); time.sleep(8 * (i + 1))
+              return b''
+          def post(u, d):
+              for i in range(4):
+                  try:
+                      r = urllib.request.Request(u, data=json.dumps(d).encode(), headers=dict(H, **{'Content-Type': 'application/json'}))
+                      return json.loads(urllib.request.urlopen(r, timeout=90).read())
+                  except Exception as e:
+                      print('reintento post', i, str(e)[:80]); time.sleep(10)
+              return {}
+          pend = json.loads(get(B + '?a=hd_pend&n=12&k=' + K) or b'{}').get('pend', [])
+          print('pendientes', len(pend))
+          for p in pend:
+              rid = str(p['id'])
+              v = json.loads(get(B + '?a=video&id=' + urllib.parse.quote(rid) + '&k=' + K) or b'{}')
+              if not v.get('ok'):
+                  print(rid, 'sin video', v.get('error')); continue
+              u = v['u'] if v['u'].startswith('http') else 'https://oasis33.co' + v['u']
+              b = get(u, 120)
+              if b[4:8] != b'ftyp':
+                  print(rid, 'video invalido'); continue
+              open('v.mp4', 'wb').write(b)
+              try:
+                  dur = float(subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', 'v.mp4'], capture_output=True, text=True).stdout.strip() or 0)
+              except Exception:
+                  dur = 0
+              ts = [float(x) for x in (p.get('t') or [])] or [0.3, dur / 2, max(0, dur - 0.3)]
+              cs = []
+              for t in ts[:6]:
+                  t = min(max(0.05, t), max(0.05, dur - 0.1)) if dur else max(0.05, t)
+                  subprocess.run(['ffmpeg', '-v', 'error', '-y', '-ss', str(t), '-i', 'v.mp4', '-frames:v', '1', '-q:v', '2', 'f.jpg'])
+                  if os.path.exists('f.jpg') and os.path.getsize('f.jpg') > 2000:
+                      cs.append({'t': round(t, 2), 'b64': base64.b64encode(open('f.jpg', 'rb').read()).decode()}); os.remove('f.jpg')
+              if not cs:
+                  print(rid, 'sin cuadros'); continue
+              r = post(B + '?a=cuadros&id=' + urllib.parse.quote(rid) + '&k=' + K, {'id': rid, 'cuadros': cs})
+              print(rid, 'subidos', len(cs), r.get('ok'), r.get('error'))
+          PY
